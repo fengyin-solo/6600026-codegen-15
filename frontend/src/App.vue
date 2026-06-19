@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed, nextTick } from 'vue';
 import { useSequenceStore } from './store/sequence';
 import AlignmentView from './components/AlignmentView.vue';
 import PhyloTree from './components/PhyloTree.vue';
@@ -11,6 +11,11 @@ const gcWindowSize = ref(50);
 const newSeqName = ref('');
 const newSeqData = ref('');
 const isBuildingTree = ref(false);
+const sequenceTableRef = ref<HTMLDivElement | null>(null);
+
+const selectedTreeNodeSet = computed(() => new Set(store.selectedTreeNodeNames));
+
+const canQuickAlign = computed(() => store.selectedTreeNodeNames.length === 2);
 
 onMounted(() => {
   store.loadMockSequences();
@@ -41,6 +46,7 @@ function handleBuildTree() {
   isBuildingTree.value = true;
   setTimeout(() => {
     store.buildTree();
+    store.clearTreeNodeSelection();
     isBuildingTree.value = false;
   }, 100);
 }
@@ -57,11 +63,38 @@ function handleLoadMock() {
   store.loadMockSequences();
   gcSeqId.value = store.sequences[0]?.id || '';
 }
+
+function handleTreeNodeClick(name: string) {
+  store.toggleTreeNodeSelection(name);
+  scrollToSequenceByName(name);
+}
+
+function scrollToSequenceByName(name: string) {
+  if (!sequenceTableRef.value) return;
+
+  nextTick(() => {
+    const rows = sequenceTableRef.value?.querySelectorAll('tbody tr');
+    if (!rows) return;
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const nameCell = row.querySelector('td:nth-child(2)');
+      if (nameCell && nameCell.textContent?.trim() === name) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        break;
+      }
+    }
+  });
+}
+
+function handleQuickAlign() {
+  if (!canQuickAlign.value) return;
+  store.quickAlignFromTree();
+}
 </script>
 
 <template>
   <div class="min-h-screen bg-gray-900 text-gray-100">
-    <!-- Header -->
     <header class="px-6 py-3 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
       <div class="flex items-center gap-3">
         <div class="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
@@ -82,14 +115,12 @@ function handleLoadMock() {
     </header>
 
     <div class="p-4 space-y-4">
-      <!-- Sequence List Panel -->
       <section class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
         <div class="px-4 py-2 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
           <h2 class="text-sm font-semibold text-gray-300">序列列表</h2>
           <span class="text-xs text-gray-500">{{ store.sequences.length }} 条序列</span>
         </div>
 
-        <!-- Add sequence form -->
         <div class="px-4 py-2 bg-gray-850 border-b border-gray-700 flex items-center gap-2" style="background-color: #1a2234;">
           <input
             v-model="newSeqName"
@@ -111,10 +142,9 @@ function handleLoadMock() {
           </button>
         </div>
 
-        <!-- Sequence table -->
-        <div class="max-h-48 overflow-auto">
+        <div ref="sequenceTableRef" class="max-h-48 overflow-auto">
           <table class="w-full text-sm">
-            <thead class="bg-gray-800 sticky top-0">
+            <thead class="bg-gray-800 sticky top-0 z-10">
               <tr class="text-gray-400 text-left">
                 <th class="px-4 py-1.5 font-medium">ID</th>
                 <th class="px-4 py-1.5 font-medium">名称</th>
@@ -123,9 +153,19 @@ function handleLoadMock() {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="seq in store.sequences" :key="seq.id" class="border-t border-gray-700 hover:bg-gray-800/50">
+              <tr
+                v-for="seq in store.sequences"
+                :key="seq.id"
+                class="border-t border-gray-700 transition-colors"
+                :class="{
+                  'bg-amber-500/20': selectedTreeNodeSet.has(seq.name)
+                }"
+              >
                 <td class="px-4 py-1.5 text-cyan-400 font-mono text-xs">{{ seq.id }}</td>
-                <td class="px-4 py-1.5 text-gray-200">{{ seq.name }}</td>
+                <td class="px-4 py-1.5 text-gray-200">
+                  <span v-if="selectedTreeNodeSet.has(seq.name)" class="text-amber-400 font-semibold">{{ seq.name }}</span>
+                  <span v-else>{{ seq.name }}</span>
+                </td>
                 <td class="px-4 py-1.5 text-gray-400">{{ seq.data.length }} bp</td>
                 <td class="px-4 py-1.5">
                   <button
@@ -146,15 +186,12 @@ function handleLoadMock() {
         </div>
       </section>
 
-      <!-- Middle Row: Alignment + GC Content -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <!-- Alignment Section -->
         <section class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div class="px-4 py-2 bg-gray-800 border-b border-gray-700">
             <h2 class="text-sm font-semibold text-gray-300">序列比对</h2>
           </div>
           <div class="p-4 space-y-3">
-            <!-- Controls -->
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="block text-xs text-gray-400 mb-1">序列 1</label>
@@ -199,12 +236,10 @@ function handleLoadMock() {
               </button>
             </div>
 
-            <!-- Alignment Result -->
             <AlignmentView :result="store.alignmentResult" />
           </div>
         </section>
 
-        <!-- GC Content Section -->
         <section class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
           <div class="px-4 py-2 bg-gray-800 border-b border-gray-700">
             <h2 class="text-sm font-semibold text-gray-300">GC含量分析</h2>
@@ -244,26 +279,62 @@ function handleLoadMock() {
               </button>
             </div>
 
-            <!-- GC Chart -->
             <GCChart :data="store.gcData" />
           </div>
         </section>
       </div>
 
-      <!-- Phylogenetic Tree Section -->
       <section class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
         <div class="px-4 py-2 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-gray-300">系统发育树</h2>
-          <button
-            @click="handleBuildTree"
-            :disabled="isBuildingTree || store.sequences.length < 2"
-            class="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {{ isBuildingTree ? '构建中...' : '构建进化树' }}
-          </button>
+          <div class="flex items-center gap-3">
+            <h2 class="text-sm font-semibold text-gray-300">系统发育树</h2>
+            <span
+              v-if="store.selectedTreeNodeNames.length > 0"
+              class="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded"
+            >
+              已选 {{ store.selectedTreeNodeNames.length }} / 2
+            </span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              v-if="store.selectedTreeNodeNames.length > 0"
+              @click="store.clearTreeNodeSelection"
+              class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded transition-colors"
+            >
+              清空选择
+            </button>
+            <button
+              @click="handleQuickAlign"
+              :disabled="!canQuickAlign"
+              class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              快速比对
+            </button>
+            <button
+              @click="handleBuildTree"
+              :disabled="isBuildingTree || store.sequences.length < 2"
+              class="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {{ isBuildingTree ? '构建中...' : '构建进化树' }}
+            </button>
+          </div>
         </div>
         <div class="p-4">
-          <PhyloTree :tree="store.phyloTree" />
+          <PhyloTree
+            :tree="store.phyloTree"
+            :selected-names="store.selectedTreeNodeNames"
+            @node-click="handleTreeNodeClick"
+          />
+        </div>
+        <div v-if="store.phyloTree" class="px-4 pb-3 text-xs text-gray-500 flex items-center gap-4">
+          <span class="flex items-center gap-1">
+            <span class="inline-block w-2 h-2 rounded-full bg-amber-500"></span>
+            点击叶节点选择样本
+          </span>
+          <span class="flex items-center gap-1">
+            <span class="inline-block w-2 h-2 rounded-full bg-cyan-500"></span>
+            可选 2 个样本进行快速比对
+          </span>
         </div>
       </section>
     </div>

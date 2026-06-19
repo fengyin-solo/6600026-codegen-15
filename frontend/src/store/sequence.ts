@@ -18,6 +18,7 @@ export const useSequenceStore = defineStore('sequence', () => {
   const phyloTree = ref<PhyloNode | null>(null);
   const selectedSeq1 = ref<string>('');
   const selectedSeq2 = ref<string>('');
+  const selectedTreeNodeNames = ref<string[]>([]);
 
   const alignmentIdentity = computed(() => {
     return alignmentResult.value ? alignmentResult.value.identity : 0;
@@ -79,6 +80,40 @@ export const useSequenceStore = defineStore('sequence', () => {
     gcData.value = calculateGCContent(seq.data, windowSize);
   }
 
+  function toggleTreeNodeSelection(name: string) {
+    const idx = selectedTreeNodeNames.value.indexOf(name);
+    if (idx > -1) {
+      selectedTreeNodeNames.value.splice(idx, 1);
+    } else {
+      if (selectedTreeNodeNames.value.length >= 2) {
+        selectedTreeNodeNames.value.shift();
+      }
+      selectedTreeNodeNames.value.push(name);
+    }
+  }
+
+  function clearTreeNodeSelection() {
+    selectedTreeNodeNames.value = [];
+  }
+
+  function getSeqIdByName(name: string): string | undefined {
+    const seq = sequences.value.find(s => s.name === name);
+    return seq?.id;
+  }
+
+  function quickAlignFromTree() {
+    if (selectedTreeNodeNames.value.length !== 2) return;
+
+    const id1 = getSeqIdByName(selectedTreeNodeNames.value[0]);
+    const id2 = getSeqIdByName(selectedTreeNodeNames.value[1]);
+
+    if (!id1 || !id2) return;
+
+    selectedSeq1.value = id1;
+    selectedSeq2.value = id2;
+    runAlignment(id1, id2, currentAlgorithm.value);
+  }
+
   return {
     sequences,
     alignmentResult,
@@ -87,6 +122,7 @@ export const useSequenceStore = defineStore('sequence', () => {
     phyloTree,
     selectedSeq1,
     selectedSeq2,
+    selectedTreeNodeNames,
     alignmentIdentity,
     alignmentScore,
     addSequence,
@@ -94,6 +130,10 @@ export const useSequenceStore = defineStore('sequence', () => {
     runAlignment,
     loadMockSequences,
     buildTree,
-    analyzeGC
+    analyzeGC,
+    toggleTreeNodeSelection,
+    clearTreeNodeSelection,
+    quickAlignFromTree,
+    getSeqIdByName
   };
 });

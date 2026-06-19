@@ -1,12 +1,30 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick } from 'vue';
+import { ref, onMounted, watch, nextTick, computed } from 'vue';
 import type { PhyloNode } from '../types';
 
 const props = defineProps<{
   tree: PhyloNode | null;
+  selectedNames?: string[];
+}>();
+
+const emit = defineEmits<{
+  (e: 'node-click', name: string): void;
 }>();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+
+interface LeafPosition {
+  name: string;
+  x: number;
+  y: number;
+  labelWidth: number;
+  hitAreaX: number;
+  hitAreaWidth: number;
+}
+
+const leafPositions = ref<LeafPosition[]>([]);
+
+const selectedSet = computed(() => new Set(props.selectedNames || []));
 
 function countLeaves(node: PhyloNode): number {
   if (node.children.length === 0) return 1;
@@ -30,7 +48,6 @@ function drawTree() {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  // Background
   ctx.fillStyle = '#111827';
   ctx.fillRect(0, 0, width, height);
 
@@ -48,48 +65,63 @@ function drawTree() {
   const xScale = treeWidth / maxDepth;
   const yStep = treeHeight / Math.max(totalLeaves - 1, 1);
 
-  // Recursive draw function
+  leafPositions.value = [];
+  const positions: LeafPosition[] = [];
+
   function drawNode(node: PhyloNode, x: number, y: number): { x: number; y: number } {
     const nodeX = x + node.branchLength * xScale;
 
     if (node.children.length === 0) {
-      // Leaf node
       const leafY = topMargin + leafIndex * yStep;
       leafIndex++;
 
-      // Draw branch
-      ctx.strokeStyle = '#6ee7b7';
-      ctx.lineWidth = 2;
+      const isSelected = selectedSet.value.has(node.name);
+
+      ctx.strokeStyle = isSelected ? '#f59e0b' : '#6ee7b7';
+      ctx.lineWidth = isSelected ? 3 : 2;
       ctx.beginPath();
       ctx.moveTo(x, leafY);
       ctx.lineTo(nodeX, leafY);
       ctx.stroke();
 
-      // Draw leaf label
-      ctx.fillStyle = '#d1d5db';
-      ctx.font = '11px sans-serif';
+      ctx.fillStyle = isSelected ? '#fbbf24' : '#d1d5db';
+      ctx.font = isSelected ? 'bold 11px sans-serif' : '11px sans-serif';
       ctx.textAlign = 'left';
       const label = node.name.length > 20 ? node.name.substring(0, 18) + '...' : node.name;
       ctx.fillText(label, nodeX + 8, leafY + 4);
 
-      // Draw dot
-      ctx.fillStyle = '#06b6d4';
+      const labelWidth = ctx.measureText(label).width;
+      const hitAreaX = nodeX - 6;
+      const hitAreaWidth = labelWidth + 20;
+
+      if (isSelected) {
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.15)';
+        ctx.fillRect(hitAreaX, leafY - 10, hitAreaWidth, 20);
+      }
+
+      ctx.fillStyle = isSelected ? '#f59e0b' : '#06b6d4';
       ctx.beginPath();
-      ctx.arc(nodeX, leafY, 3, 0, Math.PI * 2);
+      ctx.arc(nodeX, leafY, isSelected ? 5 : 3, 0, Math.PI * 2);
       ctx.fill();
+
+      positions.push({
+        name: node.name,
+        x: nodeX,
+        y: leafY,
+        labelWidth,
+        hitAreaX,
+        hitAreaWidth
+      });
 
       return { x: nodeX, y: leafY };
     }
 
-    // Internal node - draw children first
     const childPositions = node.children.map(child => drawNode(child, nodeX, y));
 
-    // Calculate this node's Y as the midpoint of children
     const minY = Math.min(...childPositions.map(p => p.y));
     const maxY = Math.max(...childPositions.map(p => p.y));
     const nodeY = (minY + maxY) / 2;
 
-    // Draw vertical line connecting children
     ctx.strokeStyle = '#6ee7b7';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -97,7 +129,6 @@ function drawTree() {
     ctx.lineTo(nodeX, maxY);
     ctx.stroke();
 
-    // Draw horizontal branch to parent
     if (x > 0 || node.branchLength > 0) {
       ctx.beginPath();
       ctx.moveTo(x, nodeY);
@@ -105,7 +136,6 @@ function drawTree() {
       ctx.stroke();
     }
 
-    // Draw internal node dot
     ctx.fillStyle = '#a78bfa';
     ctx.beginPath();
     ctx.arc(nodeX, nodeY, 2.5, 0, Math.PI * 2);
@@ -114,14 +144,47 @@ function drawTree() {
     return { x: nodeX, y: nodeY };
   }
 
-  // Start drawing from root
   drawNode(props.tree, leftMargin, topMargin);
+  leafPositions.value = positions;
 
-  // Title
   ctx.fillStyle = '#9ca3af';
   ctx.font = 'bold 12px sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('进化树 (Neighbor-Joining)', width / 2, 18);
+}
+
+function handleCanvasClick(event: MouseEvent) {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const clickX = (event.clientX - rect.left) * scaleX;
+  const clickY = (event.clientY - rect.top) * scaleY;
+
+  for (const leaf of leafPositions.value) {
+    const hitY = leaf.y - 10;
+    const hitHeight = 20;
+
+    if (
+      clickX >= leaf.hitAreaX &&
+      clickX <= leaf.hitAreaX + leaf.hitAreaWidth &&
+      clickY >= hitY &&
+      clickY <= hitY + hitHeight
+    ) {
+      emit('node-click', leaf.name);
+      return;
+    }
+
+    const dotRadius = 8;
+    const dx = clickX - leaf.x;
+    const dy = clickY - leaf.y;
+    if (dx * dx + dy * dy <= dotRadius * dotRadius) {
+      emit('node-click', leaf.name);
+      return;
+    }
+  }
 }
 
 onMounted(() => {
@@ -129,6 +192,10 @@ onMounted(() => {
 });
 
 watch(() => props.tree, () => {
+  nextTick(() => drawTree());
+}, { deep: true });
+
+watch(() => props.selectedNames, () => {
   nextTick(() => drawTree());
 }, { deep: true });
 </script>
@@ -145,7 +212,8 @@ watch(() => props.tree, () => {
         ref="canvasRef"
         width="500"
         height="400"
-        class="border border-gray-700 rounded"
+        class="border border-gray-700 rounded cursor-pointer"
+        @click="handleCanvasClick"
       ></canvas>
       <div v-else class="flex items-center justify-center w-full h-64 text-gray-600 text-sm">
         请先加载序列并构建进化树
